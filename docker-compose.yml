@@ -1,0 +1,97 @@
+version: "3.9"
+
+# DevPilot - Full Stack Local Development
+# Usage: docker-compose up -d
+
+services:
+
+  # ── FastAPI Backend ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: devpilot_api
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+      - VECTOR_STORE_PATH=/data/vector_store
+      - DB_PATH=/data/devpilot.db
+      - DASHBOARD_URL=http://localhost:3000
+    volumes:
+      - devpilot_data:/data
+      - ./backend:/app
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Slack Bot (Socket Mode) ───────────────────────────────────────────────
+  slack_bot:
+    build:
+      context: .
+      dockerfile: integrations/Dockerfile
+    container_name: devpilot_slack
+    environment:
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+      - DEVPILOT_API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+    profiles:
+      - slack
+
+  # ── React Frontend Dashboard ───────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: devpilot_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ── Redis (Session + Cache) ───────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: devpilot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+
+  # ── Nginx Reverse Proxy ───────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: devpilot_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  devpilot_data:
+  redis_data:
+
+networks:
+  default:
+    name: devpilot_network
